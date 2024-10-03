@@ -1,0 +1,27 @@
+title: 'BitSong Delegation DAO'
+description: 'The BitSong Delegation DAO is a decentralized autonomous organization that governs the BitSong Delegations.'
+navigation: false
+hero:
+  title: 'Delegation DAO'
+  description: 'The BitSong Delegation DAO is a decentralized autonomous organization that governs the BitSong Delegations.'
+  orientation: horizontal
+  headline:
+    label: BitSong Network
+    to: https://bitsong.io
+    icon: i-heroicons-arrow-top-right-on-square-20-solid
+  links:
+    - label: Get started
+      icon: i-heroicons-arrow-right-20-solid
+      trailing: true
+      to: '/getting-started'
+      size: lg
+    - label: Join Discord
+      icon: i-simple-icons-discord
+      size: lg
+      color: gray
+      to: https://discord.bitsong.io
+      target: _blank
+  code: |
+    ```bash [Terminal]
+    bitsongd tx staking delegate --from delegation-dao
+    ```
