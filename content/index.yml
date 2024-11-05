@@ -15,6 +15,12 @@ hero:
       trailing: true
       to: '/getting-started'
       size: lg
+    - label: DAO DAO
+      icon: i-heroicons-user-group-20-solid
+      color: gray
+      to: https://daodao.zone/dao/bitsong1qfwdjcmxgjr9jwa2grhf7pce87afx57j2664tvhh29j7r68a9tgqj9kuf3
+      size: lg
+      target: _blank
     - label: Join Discord
       icon: i-simple-icons-discord
       size: lg
@@ -25,3 +31,29 @@ hero:
     ```bash [Terminal]
     bitsongd tx staking delegate --from delegation-dao
     ```
+features:
+  title: 'BitSong Delegation Program'
+  links:
+    - label: 'Get Started'
+      trailingIcon: 'i-heroicons-arrow-right-20-solid'
+      to: '/getting-started'
+      size: lg
+  items:
+    - title: 'Maximize Your Rewards'
+      description: 'Earn your share of a dedicated 20,000,000 BTSG fund by contributing to the BitSong Network.'
+      icon: 'i-lucide-hand-coins'
+    - title: 'Boost Your Validator Performance'
+      description: "Increase your validator's visibility and attract more delegations through our incentive program."
+      icon: 'i-lucide-chart-no-axes-combined'
+    - title: 'Community-Driven Governance'
+      description: 'Benefit from a transparent and decentralized allocation process managed by the BitSong Delegation DAO.'
+      icon: 'i-lucide-users'
+    - title: 'Multiple Earning Opportunities'
+      description: 'Earn points for various contributions, including uptime, ecosystem participation, development, and running infrastructure.'
+      icon: 'i-lucide-circle-dollar-sign'
+    - title: 'Fair and Transparent Evaluation'
+      description: 'Clear scoring criteria and a defined points system ensure a fair evaluation process for all participants.'
+      icon: 'i-lucide-scale'
+    - title: 'Easy Application Process'
+      description: 'Apply easily through our online form and start earning rewards for your contributions. Includes link to application form.'
+      icon: 'i-lucide-pencil-line'

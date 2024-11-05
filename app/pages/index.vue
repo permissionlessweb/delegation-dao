@@ -32,5 +32,18 @@ useSeoMeta({
 
       <MDC :value="page.hero.code" class="prose prose-primary dark:prose-invert mx-auto" />
     </ULandingHero>
+
+    <ULandingSection
+      :title="page.features.title"
+      :links="page.features.links"
+    >
+      <UPageGrid>
+        <ULandingCard
+          v-for="(item, index) of page.features.items"
+          :key="index"
+          v-bind="item"
+        />
+      </UPageGrid>
+    </ULandingSection>
   </div>
 </template>
