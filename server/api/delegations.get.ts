@@ -1,3 +1,5 @@
+import newDelegations from '~~/data/output.json'
+
 const addresses = [
   'bitsong166d42nyufxrh3jps5wx3egdkmvvg7jl6k33yut', // team
   'bitsong1n4akqrmpd29stwvh6dklzecplfha2asdtce9nn', // reserve
@@ -81,11 +83,13 @@ type ValidatorResponse = {
 type StakingResponse = {
   total_amount: number
   total_rewards: number // only if denom is ubtsg
+  new_delegations: number
   delegations: {
     address: string
     name: string
     status: string
     total_amount: number
+    new_delegations: number
     total_rewards: number // only if denom is ubtsg
     delegators: {
       address: string
@@ -129,6 +133,7 @@ export default defineEventHandler(async (_event) => {
   for (const validator of validators.validators) {
     let total_amount = 0
     let total_rewards = 0
+    let total_new_delegations = 0
 
     const delegators = all_delegations.flatMap(delegations => delegations.delegation_responses)
       .filter(delegation => delegation.delegation.validator_address === validator.operator_address)
@@ -156,19 +161,24 @@ export default defineEventHandler(async (_event) => {
         }
       })
 
+    const newAmount = newDelegations.validators.find(delegation => delegation.address === validator.operator_address)?.amount || 0
+    total_new_delegations += newAmount
+
     stakingResponse.delegations.push({
       address: validator.operator_address,
       name: validator.description.moniker,
       status: validator.status,
       total_amount,
       total_rewards,
-      delegators
+      delegators,
+      new_delegations: newAmount
     })
   }
 
   return {
     total_amount: stakingResponse.delegations.reduce((acc, staking) => acc + staking.total_amount, 0),
     total_rewards: stakingResponse.delegations.reduce((acc, staking) => acc + staking.total_rewards, 0),
+    new_delegations: stakingResponse.delegations.reduce((acc, staking) => acc + staking.new_delegations, 0),
     delegations: stakingResponse.delegations.filter(staking => staking.total_amount > 0 || staking.total_rewards > 0).sort((a, b) => b.total_amount - a.total_amount)
   }
 })

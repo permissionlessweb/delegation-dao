@@ -10,14 +10,16 @@ const columns = [
   // { key: 'address', label: 'Address' },
   { key: 'name', label: 'Name' },
   { key: 'status', label: 'Status' },
-  { key: 'total_amount', label: 'Amount' },
-  { key: 'total_rewards', label: 'Rewards' }
+  { key: 'total_amount', label: 'Current' },
+  { key: 'new_delegations', label: 'New' },
+  { key: 'diff', label: 'Diff' },
+  { key: 'total_rewards', label: 'To Claim' }
 ]
 
 const subcolumns = [
   { key: 'address', label: 'Address' },
   { key: 'amount', label: 'Amount' },
-  { key: 'rewards', label: 'Rewards' }
+  { key: 'rewards', label: 'To Claim' }
 ]
 
 const formattedData = computed(() => {
@@ -26,7 +28,9 @@ const formattedData = computed(() => {
       ...delegation,
       status: delegation.status.replace('BOND_STATUS_', ''),
       total_amount: delegation.total_amount.toLocaleString(),
-      total_rewards: delegation.total_rewards.toLocaleString()
+      total_rewards: delegation.total_rewards.toLocaleString(),
+      new_delegations: delegation.new_delegations.toLocaleString(),
+      diff: (delegation.new_delegations - delegation.total_amount).toLocaleString()
     }
   })
 })
@@ -45,6 +49,11 @@ const formattedData = computed(() => {
           <UCard>
             <h1 class="text-2xl font-semibold">Total Rewards</h1>
             <p class="text-lg">{{ data.total_rewards.toLocaleString() }} BTSG</p>
+          </UCard>
+
+          <UCard>
+            <h1 class="text-2xl font-semibold">New Delegations</h1>
+            <p class="text-lg">{{ data.new_delegations.toLocaleString() }} BTSG</p>
           </UCard>
         </div>
 
