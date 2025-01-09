@@ -180,5 +180,22 @@ export default defineEventHandler(async (_event) => {
     total_rewards: stakingResponse.delegations.reduce((acc, staking) => acc + staking.total_rewards, 0),
     new_delegations: stakingResponse.delegations.reduce((acc, staking) => acc + staking.new_delegations, 0),
     delegations: stakingResponse.delegations.filter(staking => staking.total_amount > 0 || staking.total_rewards > 0).sort((a, b) => b.total_amount - a.total_amount)
+      .map((staking) => {
+        const keepValidators = [
+          'bitsongvaloper19ah9302mh80pvv5zeztdr6qcqk6z52frn6rjj5', // KalpaTech
+          'bitsongvaloper1wf3q0a3uzechxvf27reuqts8nqm45sn2yq26g3', // Cosmostation
+          'bitsongvaloper10fg3yklae97g8ueh5ut29mlwz8fdr6z8zrak6x', // Validatrium
+          'bitsongvaloper1fkj2cn209yeexxyets98evrcmmds23hck0lyzq', // ITA Stakers
+          'bitsongvaloper1wetqg989uyj3mpk07h8yt3qvu2cdlsv7fp3zda' // Cryptocrew
+        ]
+        let new_delegations = staking.new_delegations
+        if (keepValidators.includes(staking.address)) {
+          new_delegations = staking.total_amount
+        }
+        return {
+          ...staking,
+          new_delegations
+        }
+      })
   }
 })
