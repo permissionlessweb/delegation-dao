@@ -7,11 +7,10 @@ const expand = ref({
 })
 
 const columns = [
-  // { key: 'address', label: 'Address' },
   { key: 'name', label: 'Name' },
-  { key: 'total_amount', label: 'Current' },
-  { key: 'new_delegations', label: 'New' },
-  { key: 'diff', label: 'Diff' }
+  { key: 'total_amount', label: 'Current', sortable: true },
+  { key: 'new_delegations', label: 'New', sortable: true },
+  { key: 'diff', label: 'Diff', sortable: true }
 ]
 
 const subcolumns = [
@@ -20,14 +19,10 @@ const subcolumns = [
 ]
 
 const formattedData = computed(() => {
-  return data.value.delegations.map((delegation: any) => {
+  return data.value.delegations.map((delegation) => {
     return {
       ...delegation,
-      status: delegation.status.replace('BOND_STATUS_', ''),
-      total_amount: delegation.total_amount.toLocaleString(),
-      total_rewards: delegation.total_rewards.toLocaleString(),
-      new_delegations: delegation.new_delegations.toLocaleString(),
-      diff: (delegation.new_delegations - delegation.total_amount).toLocaleString()
+      diff: delegation.new_delegations - delegation.total_amount
     }
   })
 })
@@ -87,22 +82,28 @@ const formattedData = computed(() => {
             >
               {{ row.name }}
               <UBadge
-                v-if="row.status !== 'BONDED'"
+                v-if="row.status !== 'BOND_STATUS_BONDED'"
                 class="ml-2"
-                :label="row.status"
-                :color="row.status !== 'BONDED' ? 'red' : 'red'"
+                :label="row.status.replace('BOND_STATUS_', '')"
+                :color="row.status !== 'BOND_STATUS_BONDED' ? 'red' : 'red'"
               />
             </a>
+          </template>
+          <template #total_amount-data="{ row }">
+            {{ row.total_amount.toLocaleString() }}
+          </template>
+          <template #new_delegations-data="{ row }">
+            {{ row.new_delegations.toLocaleString() }}
           </template>
           <template #diff-data="{ row }">
             <span
               class="font-bold"
               :class="{
-                'text-green-500': parseFloat(row.diff) > 0,
-                'text-red-500': parseFloat(row.diff) < 0
+                'text-green-500': row.diff > 0,
+                'text-red-500': row.diff < 0
               }"
             >
-              {{ row.diff }}
+              {{ row.diff.toLocaleString() }}
             </span>
           </template>
         </UTable>
