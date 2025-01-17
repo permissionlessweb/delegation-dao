@@ -180,8 +180,8 @@ export default defineEventHandler(async (_event) => {
     total_amount: stakingResponse.delegations.reduce((acc, staking) => acc + staking.total_amount, 0),
     total_rewards: stakingResponse.delegations.reduce((acc, staking) => acc + staking.total_rewards, 0),
     new_delegations: stakingResponse.delegations.reduce((acc, staking) => acc + staking.new_delegations, 0),
-    delegations: stakingResponse.delegations.sort((a, b) => b.total_amount - a.total_amount)
-      .filter(staking => staking.total_amount > 0 || staking.new_delegations > 0)
+    delegations: stakingResponse.delegations.filter(staking => staking.total_amount > 0 || staking.new_delegations > 0)
+      .sort((a, b) => b.total_amount - a.total_amount)
       .map((staking) => {
         const keepValidators = [
           'bitsongvaloper19ah9302mh80pvv5zeztdr6qcqk6z52frn6rjj5', // KalpaTech
