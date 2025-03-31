@@ -1,4 +1,4 @@
-use std::{fs::File, str::FromStr};
+use std::{fs::File, io::Write, str::FromStr};
 
 use clap::Parser;
 use cosmos_sdk_proto::cosmos::{
@@ -9,12 +9,14 @@ use cosmos_sdk_proto::cosmos::{
 use cosmwasm_std::{Decimal, Uint128};
 use csv::Reader;
 use cw_orch::{
+    environment::{NetworkInfo,ChainKind},
     daemon::{queriers::Staking, DaemonBuilder, TxSender},
     prelude::*,
 };
+use serde::Serialize;
 use tokio::runtime::Runtime;
 
-pub const NEW_DELS_FILE: &str = "./data/new-delegations.csv";
+pub const NEW_DELS_FILE: &str = "./src/bin/data/new-delegations.csv";
 
 #[derive(Serialize)]
 struct RedelegateMsg {

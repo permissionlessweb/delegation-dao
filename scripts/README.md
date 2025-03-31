@@ -1,8 +1,12 @@
 # BitSong Delegation Realignment Tool
 
 ## TODO: 
-- sort collected maps in order 
-- consume laregest redelegate objects to fufill smallest new delegation obligations
+- get the total amount of delegations currently for delegation-dao owned addresses
+- check if dao can fufill delegations with redelegations needed to occcur. If so, include unbonding msgs for the remaining, unless it is one of the validators that have private agreements with the bitsong team?
+- broadcast redelegations
+
+- create testing simulating delegation update
+
 
 This tool automates the process of realigning delegations for BitSong DAO addresses according to a predefined distribution strategy.
 
