@@ -1,5 +1,7 @@
 # BitSong Delegation Realignment Tool
 
+DATA SOURCE: https://docs.google.com/spreadsheets/d/1Y8VGkErXrFGbmDCUDKKomn1bfMQQLIXKNJK49SYvM7M/edit?gid=0#gid=0
+
 ## TODO: 
 - get the total amount of delegations currently for delegation-dao owned addresses
 - check if dao can fufill delegations with redelegations needed to occcur. If so, include unbonding msgs for the remaining, unless it is one of the validators that have private agreements with the bitsong team?
