@@ -8,10 +8,27 @@ use cw_orch::{
     daemon::{queriers::Staking, DaemonBuilder, TxSender},
     prelude::*,
 };
-use scripts::networks::{ping_grpc, BITSONG_MAINNET, BITSONG_TESTNET, LOCAL_NETWORK1};
+
 use tokio::runtime::Runtime;
 
 pub const NEW_DELS_FILE: &str = "./data/new-delegations.csv";
+
+pub const BITSONG_NETWORK: NetworkInfo = NetworkInfo {
+    chain_name: "Bitsong",
+    pub_address_prefix: "bitsong",
+    coin_type: 639u32,
+};
+
+pub const BITSONG_MAINNET: ChainInfo = ChainInfo {
+    kind: ChainKind::Mainnet,
+    chain_id: "bitsong-2b",
+    gas_denom: "ubtsg",
+    gas_price: 0.025,
+    grpc_urls: &["http://bitsong-grpc.polkachu.com:16090"],
+    network_info: BITSONG_NETWORK,
+    lcd_url: None,
+    fcd_url: None,
+};
 
 // todo: move to .env file
 pub const MNEMONIC: &str =
@@ -40,8 +57,8 @@ fn main() -> anyhow::Result<()> {
     println!("Running Bitsong Delegation Realignment Protocol...");
     let bitsong_chain: ChainInfoOwned = match args.network.as_str() {
         "main" => BITSONG_MAINNET.to_owned(),
-        "testnet" => BITSONG_TESTNET.to_owned(),
-        "local" => LOCAL_NETWORK1.to_owned(),
+        // "testnet" => BITSONG_TESTNET.to_owned(),
+        // "local" => LOCAL_NETWORK1.to_owned(),
         _ => panic!("Invalid network"),
     }
     .into();
