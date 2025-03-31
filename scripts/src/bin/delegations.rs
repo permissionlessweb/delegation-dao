@@ -1,17 +1,50 @@
 use std::{fs::File, str::FromStr};
 
 use clap::Parser;
-use cosmos_sdk_proto::cosmos::base::query::v1beta1::PageRequest;
-use cosmwasm_std::Uint128;
+use cosmos_sdk_proto::cosmos::{
+    base::query::v1beta1::PageRequest,
+    base::v1beta1::Coin as ProtoCoin,
+    staking::v1beta1::{MsgBeginRedelegate, MsgDelegate},
+};
+use cosmwasm_std::{Decimal, Uint128};
 use csv::Reader;
 use cw_orch::{
     daemon::{queriers::Staking, DaemonBuilder, TxSender},
     prelude::*,
 };
-
 use tokio::runtime::Runtime;
 
 pub const NEW_DELS_FILE: &str = "./data/new-delegations.csv";
+
+#[derive(Serialize)]
+struct RedelegateMsg {
+    delegator_address: String,
+    validator_src_address: String,
+    validator_dst_address: String,
+    amount: String,
+    denom: String,
+}
+
+#[derive(Serialize)]
+struct DelegateMsg {
+    delegator_address: String,
+    validator_address: String,
+    amount: String,
+    denom: String,
+}
+
+/// serializes the raw maps we collect to determine how to handle redelegations
+#[derive(Serialize)]
+struct RawMapsLogs {
+    redelegations: Vec<(String, Uint128)>,
+    delegations: Vec<(String, Uint128)>,
+}
+
+#[derive(Serialize)]
+struct MessageExport {
+    redelegations: Vec<RedelegateMsg>,
+    delegations: Vec<DelegateMsg>,
+}
 
 pub const BITSONG_NETWORK: NetworkInfo = NetworkInfo {
     chain_name: "Bitsong",
@@ -43,6 +76,7 @@ struct Args {
     // /// Path to the script library
     // current_directory: String,
 }
+
 fn main() -> anyhow::Result<()> {
     // parse cargo command arguments for network type
     let args = Args::parse();
@@ -54,7 +88,6 @@ fn main() -> anyhow::Result<()> {
     ]
     .to_vec();
 
-    println!("Running Bitsong Delegation Realignment Protocol...");
     let bitsong_chain: ChainInfoOwned = match args.network.as_str() {
         "main" => BITSONG_MAINNET.to_owned(),
         // "testnet" => BITSONG_TESTNET.to_owned(),
@@ -63,10 +96,12 @@ fn main() -> anyhow::Result<()> {
     }
     .into();
 
+    // connect to chain with mnemonic
     let chain = DaemonBuilder::new(bitsong_chain.clone())
         .mnemonic(MNEMONIC)
         .build()?;
 
+    // create client
     let staking_query_client: Staking = chain.querier();
 
     // Create a new runtime for async execution
@@ -107,6 +142,15 @@ async fn realign_delegations(
         ._historical_info(height.try_into().unwrap())
         .await?;
 
+    // Load new delegations from CSV file
+    let new_delegations = load_new_delegations(NEW_DELS_FILE);
+    let aligned_vals = new_delegations.0;
+    // Calculated total amount to have delegated (includes current delegations )
+    let total_to_del = Uint128::from(new_delegations.1).checked_mul(Uint128::new(10).pow(6))?;
+
+    println!("Running Bitsong Delegation Realignment Protocol...");
+    println!("{} dels with {}ubtsg", aligned_vals.len(), total_to_del);
+
     // Process each DAO address
     for dao in dao_addrs {
         println!("\nProcessing DAO address: {}", dao);
@@ -142,101 +186,93 @@ async fn realign_delegations(
                 }
             }
         }
-
         println!("Found {} existing delegations", all_delegations.len());
 
-        // Load new delegations from CSV file
-        let loaded = load_new_delegations(NEW_DELS_FILE);
-        let aligned_vals = loaded.0;
-        let total_to_del = Uint128::from(loaded.1).checked_mul(Uint128::new(10u128).pow(6))?;
-
-        println!(
-            "Loaded {} new delegations with total amount {}ubtsg",
-            aligned_vals.len(),
-            total_to_del
-        );
-
         // Maps for tracking delegation changes
-        // map of delegations to make, along with the total
+        // del_map: map of delegations to make to fufill this rounds obligations, along with the total amount need to delegate.
+        // redel_map: map of delegations to redelegate or remove
         let mut del_map: (Vec<(String, Uint128)>, Uint128) = (vec![], Uint128::zero());
-        // map of delegations to redelegate or remove
         let mut redel_map: (Vec<(String, Uint128)>, Uint128) = (vec![], Uint128::zero());
 
-        // Process each existing delegation
         for delres in all_delegations.clone() {
             let metadata = delres.delegation.unwrap();
             let balance = Uint128::from_str(&delres.balance.unwrap().amount)
                 .expect("Failed to parse balance");
 
-            // Check if validator exists in our aligned validators list
-            if let Some(exists) = aligned_vals
-                .iter()
-                .find(|a| a.0 == metadata.validator_address)
-            {
-                let new = Uint128::from(exists.1);
-                if new < balance {
-                    let diff = balance.checked_sub(new).expect("dang");
-                    redel_map.0.push((metadata.validator_address.clone(), diff));
-                    redel_map.1 += diff;
-                    println!(
-                        "Will reduce {}ubtsg from {}",
-                        diff, metadata.validator_address
-                    );
-                } else if new > balance {
-                    // We need to increase this delegation
-                    let diff = new.checked_sub(balance).expect("darn");
-                    del_map.0.push((metadata.validator_address.clone(), diff));
-                    del_map.1 += diff;
-                    println!("Will add {} to {}", diff, metadata.validator_address);
-                } else {
-                    // Keeping delegation as is
-                    println!(
-                        "Keeping {} for {} unchanged",
-                        balance, metadata.validator_address
-                    );
-                }
-            } else {
-                // Validator not in aligned list, check if it's unbonded
-                if unbonded_vals
+            if !balance.is_zero() {
+                // Check if validator exists in our aligned validators list
+                if let Some(exists) = aligned_vals
                     .iter()
-                    .any(|ub| ub.address == metadata.validator_address)
+                    .find(|a| a.0 == metadata.validator_address)
                 {
-                    // Remove delegations to unbonded validators
-                    redel_map
-                        .0
-                        .push((metadata.validator_address.clone(), balance));
-                    redel_map.1 += balance;
-                    println!(
-                        "Will remove {} from unbonded validator {}",
-                        balance, metadata.validator_address
-                    );
-                } else if unbonding_vals
-                    .iter()
-                    .any(|ub| ub.address == metadata.validator_address)
-                {
-                    // Remove delegations to unbonded validators
-                    redel_map
-                        .0
-                        .push((metadata.validator_address.clone(), balance));
-                    redel_map.1 += balance;
-                    println!(
-                        "Will remove {} from unbonded validator {}",
-                        balance, metadata.validator_address
-                    );
+                    // check if this address is adding or removing delegations
+                    let new = Uint128::from(exists.1);
+                    if new < balance {
+                        // removing
+                        let diff = balance.checked_sub(new).expect("dang");
+                        let dd = Decimal::from_atomics(diff, 6)?;
+                        redel_map.0.push((metadata.validator_address.clone(), diff));
+                        redel_map.1 += diff;
+                        println!(
+                            "Will reduce {}ubtsg from {}",
+                            dd, metadata.validator_address
+                        );
+                    } else if new > balance {
+                        // adding
+                        let diff = new.checked_sub(balance).expect("darn");
+                        del_map.0.push((metadata.validator_address.clone(), diff));
+                        del_map.1 += diff;
+                        println!("Will add {}ubtsg to {}", diff, metadata.validator_address);
+                    } else {
+                        // Keeping delegation as is
+                        println!(
+                            "Keeping {} for {} unchanged",
+                            balance, metadata.validator_address
+                        );
+                    }
                 } else {
-                    match val_historical.hist {
-                        Some(ref hist) => {
-                            if hist.valset.clone().into_iter().any(|e| {
-                                e.operator_address == metadata.delegator_address && e.jailed
-                            }) {
-                                // Remove delegations to jailed validators
-                                redel_map
-                                    .0
-                                    .push((metadata.validator_address.clone(), balance));
-                                redel_map.1 += balance;
-                            }
+                    // Validator not in aligned list, we are removing from
+                    if unbonded_vals
+                        .iter()
+                        .any(|ub| ub.address == metadata.validator_address)
+                    {
+                        // Remove delegations to unbonded validators
+
+                        let dd = Decimal::from_atomics(balance, 6)?;
+                        println!(
+                            "Disregarding  unbonded validator {} with {}ubtsg",
+                            dd, metadata.validator_address
+                        );
+                    } else if unbonding_vals
+                        .iter()
+                        .any(|ub| ub.address == metadata.validator_address)
+                    {
+                        if balance.u128() != 0u128 {
+                            // Remove delegations to unbonded validators
+                            redel_map
+                                .0
+                                .push((metadata.validator_address.clone(), balance));
+                            redel_map.1 += balance;
+                            println!(
+                                "Will remove {}ubtsg from unbonding validator {}",
+                                balance, metadata.validator_address
+                            );
                         }
-                        None => todo!(),
+                    } else {
+                        match val_historical.hist {
+                            Some(ref hist) => {
+                                if hist.valset.clone().into_iter().any(|e| {
+                                    e.operator_address == metadata.delegator_address && e.jailed
+                                }) {
+                                    // Remove delegations to jailed validators
+                                    redel_map
+                                        .0
+                                        .push((metadata.validator_address.clone(), balance));
+                                    redel_map.1 += balance;
+                                }
+                            }
+                            None => unimplemented!(),
+                        }
                     }
                 }
             }
@@ -250,24 +286,15 @@ async fn realign_delegations(
                     .map_or(false, |del| del.validator_address == *val_addr)
             }) {
                 // This is a completely new validator to delegate to
-                let amount_uint = Uint128::from(*amount);
-                del_map.0.push((val_addr.clone(), amount_uint));
-                del_map.1 += amount_uint;
-                println!("Will add new delegation of {} to {}", amount_uint, val_addr);
+                let ant_uint = Uint128::from(*amount);
+                let amnt_dec = Decimal::from_atomics(ant_uint, 0)?;
+                del_map.0.push((val_addr.clone(), ant_uint));
+                del_map.1 += ant_uint;
+                println!(
+                    "Will add new delegation of {}ubtsg to {}",
+                    amnt_dec, val_addr
+                );
             }
-        }
-
-        // Print summary of delegation changes
-        println!("\n--- DELEGATIONS TO ADD ---");
-        println!("Total to delegate: {}", del_map.1);
-        for (validator, amount) in &del_map.0 {
-            println!("  {} → {}", validator, amount);
-        }
-
-        println!("\n--- DELEGATIONS TO REMOVE ---");
-        println!("Total to redelegate: {}", redel_map.1);
-        for (validator, amount) in &redel_map.0 {
-            println!("  {} → {}", validator, amount);
         }
 
         // Validate that the total to delegate matches what we parsed
@@ -277,9 +304,169 @@ async fn realign_delegations(
                 del_map.1, total_to_del
             );
         }
+
+        // Sort del_map by amount in ascending order
+        del_map.0.sort_by(|a, b| a.1.cmp(&b.1));
+        // Sort redel_map by amount in decending order
+        redel_map.0.sort_by(|a, b| b.1.cmp(&a.1));
+        println!("sorted");
+
+        // for each object in redel_map, try to use the tokens to redelgate & satisfy an obligated delegation in del_map.
+        // If we are able to satissfy a new delegation with an oold delegation, continue attempting to satisfy delegations to make with the redelegation value, until it is 0.
+        // once zero, go to the next object in the redel list and continue this process until there are no more redelegations to consume.
+        // If there are no more redelegations to consume but still delegations to create, we need to form normally
+
+        // Generate redelegation and delegation messages
+        let mut redelegation_msgs = Vec::<MsgBeginRedelegate>::new();
+        let mut delegation_msgs = Vec::<MsgDelegate>::new();
+        let mut to_delegate = del_map.0.clone();
+        let mut to_redelegate = redel_map.0.clone();
+        let denom = "ubtsg";
+
+        // For each redelegation to process
+        // Process each delegation by potentially using multiple redelegations
+        while !to_delegate.is_empty() && !to_redelegate.is_empty() {
+            // Get the current delegation to satisfy (using the smallest one first)
+            let (dst_validator, mut del_amount) = to_delegate[0].clone();
+            to_delegate.remove(0);
+
+            // Keep trying to satisfy this delegation until it's fully satisfied or no more redelegations
+            while !del_amount.is_zero() && !to_redelegate.is_empty() {
+                // Get the current redelegation (using the largest one first)
+                let (src_validator, redel_amount) = to_redelegate[0].clone();
+
+                if redel_amount >= del_amount {
+                    // We can fully satisfy this delegation with the current redelegation
+                    redelegation_msgs.push(MsgBeginRedelegate {
+                        delegator_address: dao.clone(),
+                        validator_src_address: src_validator.clone(),
+                        validator_dst_address: dst_validator.clone(),
+                        amount: Some(ProtoCoin {
+                            denom: denom.to_string(),
+                            amount: del_amount.to_string(),
+                        }),
+                    });
+                    // Update the remaining redelegation amount
+                    let remaining = redel_amount.checked_sub(del_amount)?;
+                    if remaining.is_zero() {
+                        // This redelegation is completely consumed
+                        to_redelegate.remove(0);
+                    } else {
+                        // Update with the remaining amount
+                        to_redelegate[0].1 = remaining;
+                    }
+                    // Delegation is fully satisfied
+                    del_amount = Uint128::zero();
+                } else {
+                    // We can only partially satisfy this delegation with current redelegation.
+                    redelegation_msgs.push(MsgBeginRedelegate {
+                        delegator_address: dao.clone(),
+                        validator_src_address: src_validator.clone(),
+                        validator_dst_address: dst_validator.clone(),
+                        amount: Some(ProtoCoin {
+                            denom: denom.to_string(),
+                            amount: redel_amount.to_string(),
+                        }),
+                    });
+
+                    // Reduce the remaining delegation amount
+                    del_amount = del_amount.checked_sub(redel_amount).unwrap();
+                    println!("del_amount: {}", del_amount);
+                    // completely consumed, remove it
+                    to_redelegate.remove(0);
+                }
+
+                // If we still have delegation amount that couldn't be satisfied, add it back
+                if !del_amount.is_zero() {
+                    // We ran out of redelegations, so this will be a regular delegation
+                    delegation_msgs.push(MsgDelegate {
+                        delegator_address: dao.clone(),
+                        validator_address: dst_validator.clone(),
+                        amount: Some(ProtoCoin {
+                            denom: denom.to_string(),
+                            amount: del_amount.to_string(),
+                        }),
+                    });
+                }
+            }
+        }
+
+        // Print any remaining redelegations that couldn't be used
+        for (src_validator, amount) in to_redelegate {
+            println!(
+                "Warning: {} ubtsg from {} couldn't be redelegated",
+                amount, src_validator
+            );
+        }
+
+        // Create normal delegation messages for any remaining delegations
+        for (dst_validator, amount) in to_delegate {
+            delegation_msgs.push(MsgDelegate {
+                delegator_address: dao.clone(),
+                validator_address: dst_validator,
+                amount: Some(ProtoCoin {
+                    denom: denom.to_string(),
+                    amount: amount.to_string(),
+                }),
+            });
+        }
+
+        let total = del_map.1.checked_mul(Uint128::new(10u128).pow(6))?;
+        // Print summary of delegation changes
+        println!("\n--- DELEGATIONS TO ADD ---");
+        println!("Total to delegate: {}", total);
+        for (validator, amount) in &del_map.0 {
+            let amnt = Decimal::from_atomics(*amount, 6)?;
+            println!("  {} → {}", validator, amnt);
+        }
+
+        println!("\n--- DELEGATIONS TO REMOVE ---");
+        println!("Total to redelegate: {}", redel_map.1);
+        for (validator, amount) in &redel_map.0 {
+            let amnt = Decimal::from_atomics(*amount, 6)?;
+            println!("  {} → {}", validator, amnt);
+        }
+
+        // Create the export object
+        let export = MessageExport {
+            redelegations: redelegation_msgs
+                .iter()
+                .map(|msg| {
+                    let amount = msg.amount.as_ref().unwrap();
+                    RedelegateMsg {
+                        delegator_address: msg.delegator_address.clone(),
+                        validator_src_address: msg.validator_src_address.clone(),
+                        validator_dst_address: msg.validator_dst_address.clone(),
+                        amount: amount.amount.clone(),
+                        denom: amount.denom.clone(),
+                    }
+                })
+                .collect(),
+            delegations: delegation_msgs
+                .iter()
+                .map(|msg| {
+                    let amount = msg.amount.as_ref().unwrap();
+                    DelegateMsg {
+                        delegator_address: msg.delegator_address.clone(),
+                        validator_address: msg.validator_address.clone(),
+                        amount: amount.amount.clone(),
+                        denom: amount.denom.clone(),
+                    }
+                })
+                .collect(),
+        };
+        // Serialize to JSON
+        let json =
+            serde_json::to_string_pretty(&export).expect("Failed to serialize messages to JSON");
+        serialize_and_print(json, format!("delegation_messages_{}.json", dao))
     }
 
     Ok(())
+}
+fn serialize_and_print(json: String, filepath: String) {
+    let mut file = File::create(filepath).expect("Failed to create JSON file");
+    file.write_all(json.as_bytes())
+        .expect("Failed to write JSON to file");
 }
 
 // Loads array of validators getting new delegations from file, returning the total new delegations
