@@ -5,16 +5,16 @@ license = "BSD-3-Clause"
 repository = "https://github.com/bitsongofficial/bs-accounts"
 version  = "0.0.1"
 
-[dependencies]
           
-
+[dependencies]
+cosmwasm-schema              = "2.2.0"
+cosmos-sdk-proto = "0.24.0"
+cosmwasm-crypto  = { version = "2.1.4",  default-features = false }
 cosmwasm-std = { version = "2.2.0", features = [
   "cosmwasm_1_4",
   "cosmwasm_2_0",
 ] }
 
-cosmos-sdk-proto = "0.24.0"
-cosmwasm-crypto  = { version = "2.1.4",  default-features = false }
  
 # Abstract Framework and CW-Orchestrator Dependencies
 abstract-std                 = "0.26.0"

@@ -3726,6 +3726,7 @@ dependencies = [
  "clap",
  "cosmos-sdk-proto 0.24.0",
  "cosmwasm-crypto",
+ "cosmwasm-schema",
  "cosmwasm-std",
  "csv",
  "cw-orch 0.28.0",
