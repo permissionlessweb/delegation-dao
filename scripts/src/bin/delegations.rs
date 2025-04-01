@@ -21,7 +21,10 @@ use cw_orch::{
 use serde::Serialize;
 use tokio::runtime::Runtime;
 
+pub const TOTAL_OBLIGATED_VALIDATORS: usize = 33;
+pub const TOTAL_OBLIGATED_DELEGATED_BTSG: Uint128 = Uint128::new(9_999_980_000_000u128);
 pub const NEW_DELS_FILE: &str = "./src/bin/data/new-delegations.csv";
+pub const RAW_MSG_JSON: &str = "delegation_messages.json";
 
 #[cw_serde]
 struct DelegationDaoEntity {
@@ -46,13 +49,13 @@ struct Delegation {
     amount: Uint128,
 }
 
-#[derive(Serialize)]
+#[cw_serde]
 struct AllAlignedDelegations {
     delegations: Vec<Delegation>,
     total: Uint128,
 }
 
-#[derive(Serialize)]
+#[cw_serde]
 struct RedelegateMsg {
     delegator_address: String,
     validator_src_address: String,
@@ -60,7 +63,8 @@ struct RedelegateMsg {
     amount: String,
     denom: String,
 }
-#[derive(Serialize)]
+
+#[cw_serde]
 struct UndelegateMsg {
     delegator_address: String,
     validator_address: String,
@@ -68,7 +72,7 @@ struct UndelegateMsg {
     denom: String,
 }
 
-#[derive(Serialize)]
+#[cw_serde]
 struct DelegateMsg {
     delegator_address: String,
     validator_address: String,
@@ -83,27 +87,28 @@ struct RawMapsLogs {
     delegations: Vec<(String, Uint128)>,
 }
 
-#[derive(Serialize)]
+#[cw_serde]
 struct Redelegations {
     data: Vec<RedelegateMsg>,
     count: usize,
     total_ubtsg: Uint128,
 }
 
-#[derive(Serialize)]
+#[cw_serde]
 struct Delegations {
     data: Vec<DelegateMsg>,
     count: usize,
     total_ubtsg: Uint128,
 }
 
-#[derive(Serialize)]
+#[cw_serde]
 struct Undelegations {
     data: Vec<UndelegateMsg>,
     count: usize,
     total_ubtsg: Uint128,
 }
-#[derive(Serialize)]
+
+#[cw_serde]
 struct MessageExport {
     redelegations: Redelegations,
     delegations: Delegations,
@@ -385,9 +390,13 @@ async fn realign_delegations(
             None => false,
         };
 
-        if val.new_delegation_amount.is_zero() || is_unbonded || is_unbonding || is_jailed {
-            // If there are delegations to unbonded/unbonding/jailed validators, add to redelegation map
+        let sum_dao_delegation = val
+            .current_delegations
+            .iter()
+            .map(|a| a.amount)
+            .sum::<Uint128>();
 
+        if val.new_delegation_amount.is_zero() || is_unbonded || is_unbonding || is_jailed {
             let reason = if is_unbonded {
                 "unbonded"
             } else if is_unbonding {
@@ -397,22 +406,22 @@ async fn realign_delegations(
             } else {
                 "jailed"
             };
+
+            println!("val.current_delegations: {:#?}", val.current_delegations);
             println!(
                 "Will remove {}ubtsg from {} validator {}",
-                val.current_delegations
-                    .iter()
-                    .map(|a| a.amount)
-                    .sum::<Uint128>(),
-                reason,
-                val.operator_addr
+                sum_dao_delegation, reason, val.operator_addr
             );
+
+            redel_total += sum_dao_delegation;
             all_redels.extend(val.current_delegations);
             continue;
         } else if total_current_del > val.new_delegation_amount {
-            // Need to reduce delegations
-            let mut diff = total_current_del
+            // Need to reduce delegations, get difference and try to create
+            let diff = total_current_del
                 .checked_sub(val.new_delegation_amount)
                 .expect("dang");
+
             // Sort current delegations by amount (largest first to optimize processing)
             let mut sorted_delegations = val.current_delegations.clone();
             sorted_delegations.sort_by(|a, b| b.amount.cmp(&a.amount));
@@ -442,7 +451,7 @@ async fn realign_delegations(
             // Add the selected delegations to all_redels
             all_redels.extend(redelegations_to_add.clone());
             println!(
-                "Will remove {}ubtsg  from {}",
+                "Will remove {}ubtsg from {}",
                 redelegations_to_add
                     .iter()
                     .map(|a| a.amount)
@@ -545,8 +554,6 @@ async fn realign_delegations(
         redelegation_msgs.len()
     );
 
-    // assert_eq!(redel_total, total_redel);
-
     let mut total_undel = Uint128::zero();
     for undel in &undelegate_msgs {
         let uint_amnt = Uint128::from_str(undel.amount.clone().expect("shoot").amount.as_str())?;
@@ -616,7 +623,10 @@ async fn realign_delegations(
     // Serialize to JSON
     let json = serde_json::to_string_pretty(&export).expect("Failed to serialize messages to JSON");
 
-    serialize_and_print(json.clone(), "delegation_messages.json".into());
+    serialize_and_print(json.clone(), RAW_MSG_JSON.to_string());
+
+    // assert with the new information that the obligated validators will have the correct balance once delegations are applied
+    verify_final_state(RAW_MSG_JSON, &all_dao_delegations, &obligated_delegations)?;
 
     Ok(())
 }
@@ -689,41 +699,6 @@ fn load_new_delegations(fp: &str, has_header: bool) -> AllAlignedDelegations {
     AllAlignedDelegations { delegations, total }
 }
 
-// Usage in test
-#[test]
-fn test_load_obligated_delegations_file() -> anyhow::Result<()> {
-    // Try with both header settings to see which matches expected value
-    let aad_with_header = load_new_delegations(NEW_DELS_FILE, true);
-    let aad_without_header = load_new_delegations(NEW_DELS_FILE, false);
-
-    println!(
-        "With header: {} delegations, total {}",
-        aad_with_header.delegations.len(),
-        aad_with_header.total
-    );
-
-    println!(
-        "Without header: {} delegations, total {}",
-        aad_without_header.delegations.len(),
-        aad_without_header.total
-    );
-
-    // Check which one matches the expected value
-    let expected = 9_999_980_000_000u128;
-
-    if aad_with_header.total.u128() == expected {
-        println!("CSV has a header row");
-        assert_eq!(aad_with_header.total.u128(), expected);
-    } else if aad_without_header.total.u128() == expected {
-        println!("CSV does not have a header row");
-        assert_eq!(aad_without_header.total.u128(), expected);
-    } else {
-        panic!("Neither header configuration matches expected total");
-    }
-
-    Ok(())
-}
-
 fn optimize_delegations(
     current_delegations: Vec<Delegation>,
     obligated_delegations: &[Delegation],
@@ -733,12 +708,17 @@ fn optimize_delegations(
     Vec<MsgDelegate>,
     Vec<MsgUndelegate>,
 ) {
+    // Maps of all current and obligated delegations
     let mut old_delegations: HashMap<String, Vec<Delegation>> = HashMap::new();
-    let mut desired_delegations: HashMap<String, Uint128> = HashMap::new();
+    let mut obligated_delegations_map: HashMap<String, Uint128> = HashMap::new();
 
-    // Preprocessing: Calculate total current and target delegations
+    // Preprocessing: Assert current and obligated delegations total
     let mut total_current_delegation = Uint128::zero();
-    let mut total_target_delegation = Uint128::zero();
+    let mut total_obligated_delegation = Uint128::zero();
+
+    let mut redelegation_msgs = Vec::<MsgBeginRedelegate>::new();
+    let mut delegation_msgs = Vec::<MsgDelegate>::new();
+    let mut undelegate_msgs = Vec::<MsgUndelegate>::new();
 
     // save old delegations hash map with validator as key
     for del in current_delegations {
@@ -749,19 +729,17 @@ fn optimize_delegations(
             .push(del.clone());
     }
 
-    let mut redelegation_msgs = Vec::<MsgBeginRedelegate>::new();
-    let mut delegation_msgs = Vec::<MsgDelegate>::new();
-    let mut undelegate_msgs = Vec::<MsgUndelegate>::new();
+
 
     // save desired delegations hash map with validator as key
     for del in obligated_delegations {
         let amount = del.amount;
-        total_target_delegation += amount;
-        *desired_delegations
+        total_obligated_delegation += amount;
+        *obligated_delegations_map
             .entry(del.operator_addr.clone())
             .or_default() += amount;
     }
-
+    assert_eq!(total_obligated_delegation, TOTAL_OBLIGATED_DELEGATED_BTSG);
     // First pass: Process validators that need additional delegations
     for target_del in obligated_delegations {
         let target_validator = &target_del.operator_addr;
@@ -789,10 +767,11 @@ fn optimize_delegations(
             }
 
             // Check if source validator has excess over its own target
-            let src_target = desired_delegations
+            let src_target = obligated_delegations_map
                 .get(src_validator)
                 .copied()
                 .unwrap_or(Uint128::zero());
+            // current delegation sum
             let src_current: Uint128 = current_dels.iter().map(|d| d.amount).sum();
 
             if src_current <= src_target {
@@ -857,7 +836,7 @@ fn optimize_delegations(
     // Second pass: Handle undelegations for validators with excess
     for (validator, dels) in &old_delegations {
         let current_total: Uint128 = dels.iter().map(|d| d.amount).sum();
-        let target = desired_delegations
+        let target = obligated_delegations_map
             .get(validator)
             .copied()
             .unwrap_or(Uint128::zero());
@@ -964,7 +943,8 @@ fn debug_delegation_tracking(
     for (validator, amount) in detailed_current_dels {
         sum += amount;
     }
-    println!("sum: {}", sum);
+    let dec = Decimal::from_atomics(sum, 6)?;
+    println!("sum: {}", dec);
 
     // Print detailed breakdown of target delegations
     println!("\n Obligated Delegation Breakdown:");
@@ -976,10 +956,173 @@ fn debug_delegation_tracking(
     detailed_obligated_delegations.sort_by(|a, b| b.1.cmp(&a.1));
 
     sum = Uint128::zero();
-    for (validator, amount) in detailed_obligated_delegations {
+    for (_, amount) in detailed_obligated_delegations {
         sum += amount;
     }
     println!("sum: {}", sum);
+
+    Ok(())
+}
+
+fn verify_final_state(
+    json_file: &str,
+    current_delegations: &[DelegationResponse],
+    obligated_delegations: &[Delegation],
+) -> anyhow::Result<()> {
+    println!("\n--- VERIFYING FINAL VALIDATOR STATE ---");
+
+    // Read and parse the JSON file
+    let file_content = std::fs::read_to_string(json_file)?;
+    let export: MessageExport = serde_json::from_str(&file_content)?;
+
+    // Create maps for current and target delegations by validator
+    let mut current_by_validator: HashMap<String, Uint128> = HashMap::new();
+    let mut obligated_by_validator: HashMap<String, Uint128> = HashMap::new();
+
+    // Populate current delegations map
+    for del in current_delegations {
+        let validator = del
+            .delegation
+            .as_ref()
+            .expect("msg")
+            .validator_address
+            .clone();
+        let amount = Uint128::from_str(&del.balance.as_ref().expect("msg").amount)?;
+        *current_by_validator.entry(validator).or_default() += amount;
+    }
+
+    // Populate obligated delegations map
+    for del in obligated_delegations {
+        *obligated_by_validator
+            .entry(del.operator_addr.clone())
+            .or_default() += del.amount;
+    }
+
+    // Apply all changes from the export to simulate final state
+    let mut final_state = current_by_validator.clone();
+
+    // Apply redelegations (subtract from source, add to destination)
+    for redel in &export.redelegations.data {
+        let amount = Uint128::from_str(&redel.amount)?;
+        *final_state
+            .entry(redel.validator_src_address.clone())
+            .or_default() -= amount;
+        *final_state
+            .entry(redel.validator_dst_address.clone())
+            .or_default() += amount;
+    }
+
+    // Apply delegations (add to validator)
+    for del in &export.delegations.data {
+        let amount = Uint128::from_str(&del.amount)?;
+        *final_state
+            .entry(del.validator_address.clone())
+            .or_default() += amount;
+    }
+
+    // Apply undelegations (subtract from validator)
+    for undel in &export.undelegates.data {
+        let amount = Uint128::from_str(&undel.amount)?;
+        *final_state
+            .entry(undel.validator_address.clone())
+            .or_default() -= amount;
+    }
+
+    // Verify the final state matches the obligated state
+    let mut discrepancies = Vec::new();
+    let mut total_final = Uint128::zero();
+    let mut total_obligated = Uint128::zero();
+
+    // Check each validator's final state against obligation
+    for (validator, &obligated_amount) in &obligated_by_validator {
+        let final_amount = final_state
+            .get(validator)
+            .copied()
+            .unwrap_or(Uint128::zero());
+        total_obligated += obligated_amount;
+        total_final += final_amount;
+
+        if final_amount != obligated_amount {
+            discrepancies.push((
+                validator.clone(),
+                final_amount,
+                obligated_amount,
+                final_amount
+                    .checked_sub(obligated_amount)
+                    .unwrap_or_else(|_| {
+                        obligated_amount
+                            .checked_sub(final_amount)
+                            .unwrap_or(Uint128::zero())
+                    }),
+            ));
+        }
+    }
+
+    // Print verification results
+    println!(
+        "Total final delegation amount: {}",
+        Decimal::from_atomics(total_final, 6)?
+    );
+    println!(
+        "Total obligated delegation amount: {}",
+        Decimal::from_atomics(total_obligated, 6)?
+    );
+
+    if discrepancies.is_empty() {
+        println!(
+            "✅ VERIFICATION PASSED: All validators have the correct obligated delegation amount"
+        );
+    } else {
+        println!(
+            "❌ VERIFICATION FAILED: Found {} validators with discrepancies",
+            discrepancies.len()
+        );
+
+        // Sort discrepancies by difference amount (largest first)
+        discrepancies.sort_by(|a, b| b.3.cmp(&a.3));
+
+        println!("\nTop discrepancies:");
+        for (validator, final_amount, obligated_amount, diff) in discrepancies.iter().take(10) {
+            println!(
+                "Validator {}: Final={}, Obligated={}, Diff={}",
+                validator,
+                Decimal::from_atomics(*final_amount, 6)?,
+                Decimal::from_atomics(*obligated_amount, 6)?,
+                Decimal::from_atomics(*diff, 6)?
+            );
+        }
+    }
+
+    // Check for validators with redelegations or undelegations that aren't in obligated_delegations
+    let mut unexpected_validators = Vec::new();
+    for validator in final_state.keys() {
+        if !obligated_by_validator.contains_key(validator)
+            && final_state
+                .get(validator)
+                .copied()
+                .unwrap_or(Uint128::zero())
+                > Uint128::zero()
+        {
+            unexpected_validators.push((
+                validator.clone(),
+                final_state
+                    .get(validator)
+                    .copied()
+                    .unwrap_or(Uint128::zero()),
+            ));
+        }
+    }
+
+    if !unexpected_validators.is_empty() {
+        println!("\n⚠️ WARNING: Found {} validators with delegations that are not in the obligated list:", unexpected_validators.len());
+        for (validator, amount) in unexpected_validators {
+            println!(
+                "Validator {}: Amount={}",
+                validator,
+                Decimal::from_atomics(amount, 6)?
+            );
+        }
+    }
 
     Ok(())
 }
@@ -992,16 +1135,62 @@ mod tests {
     fn test_load_obligated_delegations_file() -> anyhow::Result<()> {
         let aad = load_new_delegations(NEW_DELS_FILE, false);
         // Check the calculated total from the struct
-        println!("Total from struct: {}", aad.total);
 
-        // Calculate and check the sum of individual delegations
-        let sum_of_delegations: Uint128 = aad.delegations.iter().map(|a| a.amount).sum();
-        println!("Sum of delegations: {}", sum_of_delegations);
+        // Calculate and check the sum of individual
+        let obligated_delegation_sum: Uint128 = aad.delegations.iter().map(|a| a.amount).sum();
+        println!("Total from struct : {}", aad.total);
+        println!("Sum of delegations: {}", obligated_delegation_sum);
 
         // Both should match the expected value
-        assert_eq!(aad.delegations.len(), 33);
-        assert_eq!(aad.total.u128(), 9_999_980_000_000u128);
-        assert_eq!(sum_of_delegations.u128(), 9_999_980_000_000u128);
+        assert_eq!(aad.delegations.len(), TOTAL_OBLIGATED_VALIDATORS);
+        assert_eq!(aad.total.u128(), TOTAL_OBLIGATED_DELEGATED_BTSG.u128());
+        assert_eq!(
+            obligated_delegation_sum.u128(),
+            TOTAL_OBLIGATED_DELEGATED_BTSG.u128()
+        );
+
+        Ok(())
+    }
+
+    // Add this function near the end of realign_delegations,
+    // just before the final Ok(()) return
+
+    #[test]
+    fn test_accuracy_delegations_message_json() -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    // Usage in test
+    #[test]
+    fn test_yes_no_load_obligated_delegations_file() -> anyhow::Result<()> {
+        // Try with both header settings to see which matches expected value
+        let aad_with_header = load_new_delegations(NEW_DELS_FILE, true);
+        let aad_without_header = load_new_delegations(NEW_DELS_FILE, false);
+
+        println!(
+            "With header: {} delegations, total {}",
+            aad_with_header.delegations.len(),
+            aad_with_header.total
+        );
+
+        println!(
+            "Without header: {} delegations, total {}",
+            aad_without_header.delegations.len(),
+            aad_without_header.total
+        );
+
+        // Check which one matches the expected value
+        let expected = 9_999_980_000_000u128;
+
+        if aad_with_header.total.u128() == expected {
+            println!("CSV has a header row");
+            assert_eq!(aad_with_header.total.u128(), expected);
+        } else if aad_without_header.total.u128() == expected {
+            println!("CSV does not have a header row");
+            assert_eq!(aad_without_header.total.u128(), expected);
+        } else {
+            panic!("Neither header configuration matches expected total");
+        }
 
         Ok(())
     }
