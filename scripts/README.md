@@ -1,78 +1,59 @@
 # BitSong Delegation Realignment Tool
 
-DATA SOURCE: https://docs.google.com/spreadsheets/d/1Y8VGkErXrFGbmDCUDKKomn1bfMQQLIXKNJK49SYvM7M/edit?gid=0#gid=0
-
-## TODO: 
-- omit validators with existing agreements of bitsong ?
-- create testing simulating delegation update
-
-
-This tool automates the process of realigning delegations for BitSong DAO addresses according to a predefined distribution strategy.
-
 ## Overview
 
-The BitSong Delegation Realignment Tool calculates and reports the necessary delegation changes to align current validator stakes with a target distribution. It:
+The BitSong Delegation Realignment Tool is a sophisticated Rust application designed to automate and optimize the delegation strategy for BitSong DAO addresses. It provides a comprehensive solution for managing and redistributing validator stakes according to a predefined distribution strategy.
 
+## Key Functions
+
+### `main()`
+- Parses command-line arguments for network selection
+- Initializes the blockchain connection
+- Executes the delegation realignment process
+
+### `realign_delegations()`
+The core function that orchestrates the entire delegation realignment process:
 1. Fetches current delegations for specified DAO addresses
-2. Reads target delegation distributions from a CSV file
-3. Calculates required adjustments to match the target distribution
-4. Identifies delegations that should be removed (unbonded, unbonding, or jailed)
-5. Generates a comprehensive report of changes needed
+2. Retrieves validator status (unbonded, unbonding, jailed)
+3. Loads target delegation distribution from CSV
+4. Processes and matches current delegations with target distribution
+5. Generates redelegation, delegation, and undelegation messages
+
+### `optimize_delegations()`
+Advanced delegation optimization function that:
+- Matches current delegations with target distributions
+- Handles delegation reductions and increases
+- Prioritizes redelegation over new delegations
+- Manages validators with insufficient or excess delegations
+
+### `load_new_delegations()`
+- Reads target delegation distribution from CSV file
+- Parses validator addresses and delegation amounts
+- Calculates total delegation amount
+
+## Delegation Strategy
+
+The tool implements a sophisticated delegation strategy:
+
+1. **Validator Status Handling**
+   - Automatically removes delegations from:
+     * Unbonded validators
+     * Unbonding validators
+     * Jailed validators
+
+2. **Delegation Optimization**
+   - Prioritizes redelegating existing funds
+   - Minimizes direct new delegations
+   - Attempts to match target distribution precisely
+
+3. **Comprehensive Reporting**
+   - Generates detailed logs of:
+     * Delegations to add
+     * Delegations to remove
+     * Undelegation requirements
+   - Produces a JSON export of all proposed changes
 
 ## Usage
 
 ```bash
-cargo run -- --network <network>
-```
-
-Where `<network>` is one of:
-- `main` - BitSong mainnet
-- `testnet` - BitSong testnet
-- `local` - Local development network
-
-## Configuration
-
-### DAO Addresses
-
-The tool processes delegations for the following DAO addresses:
-- bitsong166d42nyufxrh3jps5wx3egdkmvvg7jl6k33yut
-- bitsong1nphhydjshzjevd03afzlce0xnlrnsm27hy9hgd
-- bitsong1tgzday8yewn8n5j0prgsc9t5r3gg2cwnyf9jlv
-
-### Delegation Distribution File
-
-Target delegations are read from a CSV file located at `./data/new-delegations.csv`. The file should have two columns:
-1. Validator address
-2. Amount to delegate (in BTSG, will be automatically converted to ubtsg)
-
-Example:
-```csv
-bitsongvaloper1abcdef...,10000
-bitsongvaloper1ghijkl...,5000
-```
-
-## Delegation Logic
-
-The tool applies the following rules:
-
-1. **Existing validators in target list**:
-   - If current delegation > target: Reduce delegation
-   - If current delegation < target: Increase delegation
-   - If equal: No change
-
-2. **Validators to remove**:
-   - Unbonded validators
-   - Unbonding validators
-   - Jailed validators
-   - Any validator not in the target list
-
-3. **New validators**:
-   - Delegates specified amount to any validator in the target list that doesn't already have a delegation
-
-## Requirements
-
-- Rust toolchain
-- Access to BitSong network (mainnet, testnet, or local)
-- Properly formatted CSV file with target delegations
-
- 
+cargo run -- --network main
