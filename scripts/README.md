@@ -1,12 +1,17 @@
 # BitSong Delegation Realignment Tool
 
-## TODO
-- filter modifying delegation from one of validators with existing agreement with bitsong team?
-- assert each delegator recieving a redelegations utlizate amount to have once script is complete 
+##  
+- assert amount to be bonded aligns with obligated
+- assert amount to be unbonded aligns with obligated
+- assert we will never run into max_entries issue (7 delegations per (del/val) key, 7 redelegations per (del/src/dst) key)
 
 ## Overview
 
 The BitSong Delegation Realignment Tool is a sophisticated Rust application designed to automate and optimize the delegation strategy for BitSong DAO addresses. It provides a comprehensive solution for managing and redistributing validator stakes according to a predefined distribution strategy.
+
+
+## DATA SOURCE
+google docs: https://docs.google.com/spreadsheets/d/1Y8VGkErXrFGbmDCUDKKomn1bfMQQLIXKNJK49SYvM7M/edit?gid=1983149619#gid=1983149619 
 
 ## Key Functions
 
