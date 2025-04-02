@@ -28,6 +28,7 @@ cw-orch                      = { version = "0.28.0", features = ["daemon"] }
 
 clap                         = { version = "4.0.32", features = ["derive"] }
 csv                          = "1.2"
+cosmrs                       = "0.19.0"
 anyhow                       = "1"
 dirs                         = "5.0.1"
 dotenv                     = { version = "0.15.0" }

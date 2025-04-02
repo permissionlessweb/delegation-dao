@@ -17,7 +17,7 @@ Google docs: https://docs.google.com/spreadsheets/d/1Y8VGkErXrFGbmDCUDKKomn1bfMQ
 ### `realign_delegations()`
 The core function that orchestrates the entire delegation realignment process:
 1. Fetches current delegations for specified DAO addresses
-2. Retrieves validator status (unbonded, unbonding, jailed)
+2. Retrieves validator status (unbonded, unbo   nding, jailed)
 3. Loads target delegation distribution from CSV
 4. Processes and matches current delegations with target distribution
 5. Generates redelegation, delegation, and undelegation messages
@@ -92,5 +92,8 @@ In addition to unit tests, the tool includes runtime verification:
 ## Usage
 
 ```bash
-cargo run -- --network main
+## without broadcasted msgs
+cargo run -- --network main --broadcast false
+## with broadcasting msgs
+cargo run -- --network main --broadcast true
 ```

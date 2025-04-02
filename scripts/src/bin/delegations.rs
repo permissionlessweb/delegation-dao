@@ -1,24 +1,23 @@
-use std::{collections::HashMap, fs::File, io::Write, mem::zeroed, str::FromStr};
+use std::{collections::HashMap, fs::File, io::Write, str::FromStr};
 
 use clap::Parser;
 use cosmos_sdk_proto::cosmos::{
     base::{query::v1beta1::PageRequest, v1beta1::Coin as ProtoCoin},
-    staking::v1beta1::{
-        DelegationResponse, MsgBeginRedelegate, MsgDelegate, MsgDelegateResponse, MsgUndelegate,
-    },
+    staking::v1beta1::{DelegationResponse, MsgBeginRedelegate, MsgDelegate, MsgUndelegate},
 };
+use cosmrs::{tx::Msg, AccountId};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Decimal, Uint128};
-use csv::{Reader, ReaderBuilder};
+use csv::ReaderBuilder;
 use cw_orch::{
     daemon::{
         queriers::{Bank, Staking},
-        DaemonBuilder, TxSender,
+        DaemonBuilder, TxSender, Wallet,
     },
     environment::{ChainKind, NetworkInfo},
     prelude::*,
 };
-use serde::Serialize;
+
 use tokio::runtime::Runtime;
 
 pub const TOTAL_OBLIGATED_VALIDATORS: usize = 33;
@@ -80,13 +79,6 @@ struct DelegateMsg {
     denom: String,
 }
 
-/// serializes the raw maps we collect to determine how to handle redelegations
-#[derive(Serialize)]
-struct RawMapsLogs {
-    redelegations: Vec<(String, Uint128)>,
-    delegations: Vec<(String, Uint128)>,
-}
-
 #[cw_serde]
 struct Redelegations {
     data: Vec<RedelegateMsg>,
@@ -142,8 +134,9 @@ struct Args {
     /// Network to deploy on: main, testnet, local
     #[clap(short, long)]
     network: String,
-    // /// Path to the script library
-    // current_directory: String,
+    /// whether or not to broadcast the txs formed
+    #[clap(short, long)]
+    broadcast: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -166,13 +159,14 @@ fn main() -> anyhow::Result<()> {
     .into();
 
     // connect to chain with mnemonic
-    let chain = DaemonBuilder::new(bitsong_chain.clone())
+    let mut chain = DaemonBuilder::new(bitsong_chain.clone())
         .mnemonic(MNEMONIC)
         .build()?;
 
     // create client
     let staking_query_client: Staking = chain.querier();
     let bank_query_client: Bank = chain.querier();
+    let node_query: queriers::Node = chain.node_querier();
 
     // Create a new runtime for async execution
     let rt = Runtime::new()?;
@@ -181,7 +175,7 @@ fn main() -> anyhow::Result<()> {
     if let Err(err) = rt.block_on(realign_delegations(
         staking_query_client,
         bank_query_client,
-        delegation_dao_addrs,
+        &delegation_dao_addrs,
         chain.node_querier().latest_block()?.height,
     )) {
         log::error!("{}", err);
@@ -191,13 +185,26 @@ fn main() -> anyhow::Result<()> {
 
         ::std::process::exit(1);
     }
+
+    if args.broadcast {
+        //  Broadcast del/redel/undel msgs
+        let wallet = chain.sender_mut();
+        form_and_broadcast_obligated_msgs(
+            rt,
+            node_query,
+            wallet.clone(),
+            RAW_MSG_JSON,
+            delegation_dao_addrs,
+        )?;
+    }
+
     Ok(())
 }
 
 async fn realign_delegations(
     staking_query_client: Staking,
     bank_client: Bank,
-    dao_addrs: Vec<String>,
+    dao_addrs: &[String],
     height: u64,
 ) -> anyhow::Result<()> {
     // logs any errors
@@ -215,8 +222,8 @@ async fn realign_delegations(
         .await?;
 
     // Load new delegations from CSV file
-    let mut all_oblgated_dels = load_new_delegations(NEW_DELS_FILE, false);
-    let mut obligated_delegations = all_oblgated_dels.delegations;
+    let all_oblgated_dels = load_new_delegations(NEW_DELS_FILE, false);
+    let obligated_delegations = all_oblgated_dels.delegations;
     let total_obligated_delegations = Uint128::from(all_oblgated_dels.total);
 
     println!("Running Bitsong Delegation Realignment Protocol...");
@@ -241,7 +248,7 @@ async fn realign_delegations(
         "bitsongvaloper1wetqg989uyj3mpk07h8yt3qvu2cdlsv7fp3zda".into(),
         "bitsongvaloper1jxv0u20scum4trha72c7ltfgfqef6nscl86wxa".into(),
     ];
-    for dao in &dao_addrs {
+    for dao in dao_addrs {
         let mut next_key = None;
         loop {
             let response = staking_query_client
@@ -535,10 +542,6 @@ async fn realign_delegations(
         Decimal::from_atomics(total_del, 6)?,
         delegation_msgs.len()
     );
-    // assert_eq!(
-    //     Decimal::from_atomics(del_total, 6)?,
-    //     Decimal::from_atomics(total_del, 6)?
-    // );
 
     println!("\n--- DELEGATIONS TO REMOVE ---");
     let mut total_redel = Uint128::zero();
@@ -631,10 +634,154 @@ async fn realign_delegations(
     Ok(())
 }
 
-fn serialize_and_print(json: String, filepath: String) {
-    let mut file = File::create(filepath).expect("Failed to create JSON file");
-    file.write_all(json.as_bytes())
-        .expect("Failed to write JSON to file");
+fn form_and_broadcast_obligated_msgs(
+    rt: Runtime,
+    node_query: queriers::Node,
+    mut wallet: Wallet,
+    json: &str,
+    dao_addrs: Vec<String>,
+) -> anyhow::Result<()> {
+    // load all msgs to broadcast
+    let mut mut_wallet = wallet;
+
+    // load json msgs
+    let file_content = std::fs::read_to_string(json.to_string())?;
+    let obligated_export: MessageExport = serde_json::from_str(&file_content)?;
+
+    for dao in dao_addrs {
+        mut_wallet.set_authz_granter(&Addr::unchecked(&dao));
+
+        let dao_msgs = filter_obligated_msgs(obligated_export.clone().clone(), dao);
+
+        // Combine all messages into a single vector
+        let mut all_msgs: Vec<cosmrs::Any> = Vec::new();
+        all_msgs.extend(dao_msgs.0.iter().map(|msg| cosmrs::Any {
+            type_url: "/cosmos.staking.v1beta1.MsgBeginRedelegate".to_string(),
+            value: msg.clone().into_any().unwrap().value,
+        }));
+        all_msgs.extend(dao_msgs.1.iter().map(|msg| cosmrs::Any {
+            type_url: "/cosmos.staking.v1beta1.MsgDelegate".to_string(),
+            value: msg.clone().into_any().unwrap().value,
+        }));
+        all_msgs.extend(dao_msgs.2.iter().map(|msg| cosmrs::Any {
+            type_url: "/cosmos.staking.v1beta1.MsgUndelegate".to_string(),
+            value: msg.clone().into_any().unwrap().value,
+        }));
+
+        if all_msgs.is_empty() {
+            continue;
+        }
+
+        // Calculate number of bundles needed (32 msgs per bundle)
+        let num_bundles = (all_msgs.len() as f64).ceil() / 32 as f64;
+
+        // Broadcast each bundle
+        for i in 0..num_bundles as usize {
+            let start = i * 32;
+            let end = core::cmp::min(start + 32, all_msgs.len());
+            let bundle = all_msgs[start..end].to_vec();
+
+            // simulate first, broadcast
+            rt.block_on(mut_wallet.simulate(bundle.clone(), None))?;
+            rt.block_on(mut_wallet.commit_tx_any(bundle, None))?;
+
+            // Wait for 7 seconds before next batch
+            std::thread::sleep(std::time::Duration::new(7, 0));
+        }
+    }
+    Ok(())
+}
+
+fn filter_obligated_msgs(
+    obligated_export: MessageExport,
+    dao: String,
+) -> (
+    Vec<cosmrs::staking::MsgBeginRedelegate>,
+    Vec<cosmrs::staking::MsgDelegate>,
+    Vec<cosmrs::staking::MsgUndelegate>,
+) {
+    // prepare 32 msgs batches. Include all msgs where this dao is delegator.
+    let redels: Vec<RedelegateMsg> = obligated_export
+        .redelegations
+        .data
+        .into_iter()
+        .filter(|rd| rd.delegator_address == dao)
+        .collect();
+
+    let dels: Vec<DelegateMsg> = obligated_export
+        .delegations
+        .data
+        .into_iter()
+        .filter(|rd| rd.delegator_address == dao)
+        .collect();
+
+    let undels: Vec<UndelegateMsg> = obligated_export
+        .undelegates
+        .data
+        .into_iter()
+        .filter(|rd| rd.delegator_address == dao)
+        .collect();
+
+    // form into cosmrs msgs
+    let mut rdel_msgs = vec![];
+    let mut del_msgs = vec![];
+    let mut udel_msgs = vec![];
+    for rd in redels {
+        rdel_msgs.push(form_redel_msg(rd));
+    }
+    for d in dels {
+        del_msgs.push(form_del_msg(d));
+    }
+    for ud in undels {
+        udel_msgs.push(form_undel_msg(ud));
+    }
+
+    (rdel_msgs, del_msgs, udel_msgs)
+}
+
+fn form_redel_msg(redel: RedelegateMsg) -> cosmrs::staking::MsgBeginRedelegate {
+    cosmrs::staking::MsgBeginRedelegate {
+        // Delegator's address.
+        delegator_address: AccountId::from_str(&redel.delegator_address).unwrap(),
+
+        // Source validator's address.
+        validator_src_address: AccountId::from_str(&redel.validator_src_address).unwrap(),
+
+        // Destination validator's address.
+        validator_dst_address: AccountId::from_str(&redel.validator_dst_address).unwrap(),
+
+        // Amount to UnDelegate
+        amount: cosmrs::Coin {
+            amount: Uint128::from_str(&redel.amount).unwrap().u128(),
+            denom: cosmrs::Denom::from_str("ubtsg").unwrap(),
+        },
+    }
+}
+fn form_del_msg(del: DelegateMsg) -> cosmrs::staking::MsgDelegate {
+    cosmrs::staking::MsgDelegate {
+        // Delegator's address.
+        delegator_address: AccountId::from_str(&del.delegator_address).unwrap(),
+        validator_address: AccountId::from_str(&del.validator_address).unwrap(),
+
+        // Amount to Delegate
+        amount: cosmrs::Coin {
+            amount: Uint128::from_str(&del.amount).unwrap().u128(),
+            denom: cosmrs::Denom::from_str("ubtsg").unwrap(),
+        },
+    }
+}
+fn form_undel_msg(del: UndelegateMsg) -> cosmrs::staking::MsgUndelegate {
+    cosmrs::staking::MsgUndelegate {
+        // Delegator's address.
+        delegator_address: AccountId::from_str(&del.delegator_address).unwrap(),
+        validator_address: AccountId::from_str(&del.validator_address).unwrap(),
+
+        // Amount to Delegate
+        amount: cosmrs::Coin {
+            amount: Uint128::from_str(&del.amount).unwrap().u128(),
+            denom: cosmrs::Denom::from_str("ubtsg").unwrap(),
+        },
+    }
 }
 
 // Loads array of validators getting new delegations from file, returning the total new delegations
@@ -728,8 +875,6 @@ fn optimize_delegations(
             .or_default()
             .push(del.clone());
     }
-
-
 
     // save desired delegations hash map with validator as key
     for del in obligated_delegations {
@@ -1125,6 +1270,12 @@ fn verify_final_state(
     }
 
     Ok(())
+}
+
+fn serialize_and_print(json: String, filepath: String) {
+    let mut file = File::create(filepath).expect("Failed to create JSON file");
+    file.write_all(json.as_bytes())
+        .expect("Failed to write JSON to file");
 }
 
 #[cfg(test)]
